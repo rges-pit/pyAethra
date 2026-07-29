@@ -174,7 +174,9 @@ def run_pipeline_from_dataframe(df, config, debug=False):
                          "chi2_red_pspl": np.nan, "is_candidate": False, "is_ffp_candidate": False}
 
         is_variable_star = bool(scan_candidate and (periodic_veto or recurrent_veto or veto_chromatic))
-        is_candidate     = bool(scan_candidate and not is_variable_star)
+        is_candidate     = bool(
+            scan_candidate and pspl_info["is_candidate"] and not is_variable_star
+        )
         is_ffp_candidate = bool(is_candidate and pspl_info["is_ffp_candidate"])
 
         t0_output = (

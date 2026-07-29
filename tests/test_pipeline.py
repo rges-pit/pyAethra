@@ -76,6 +76,27 @@ def test_pipeline_runs_on_dataframe():
     assert bool(df.iloc[0]["bump_flag"]) is True
 
 
+def test_pipeline_rejects_bad_pspl_fit(monkeypatch):
+    def bad_pspl_fit(*args, **kwargs):
+        return {
+            "t0_fit_raw": 2459060.0,
+            "u0_fit": 0.1,
+            "tE_fit": 8.0,
+            "chi2_red_pspl": 3.0,
+            "is_candidate": False,
+            "is_ffp_candidate": False,
+        }
+
+    monkeypatch.setattr("aethra.pipeline.fit_pspl_candidate", bad_pspl_fit)
+
+    df = run_pipeline_from_dataframe(make_lightcurve(with_event=True), CONFIG)
+
+    assert bool(df.iloc[0]["bump_flag"]) is True
+    assert bool(df.iloc[0]["veto_periodic"]) is False
+    assert bool(df.iloc[0]["veto_recurrent"]) is False
+    assert bool(df.iloc[0]["is_candidate"]) is False
+
+
 def test_flat_lightcurve_is_not_a_candidate():
     df = run_pipeline_from_dataframe(make_lightcurve(with_event=False), CONFIG)
     assert bool(df.iloc[0]["is_candidate"]) is False
