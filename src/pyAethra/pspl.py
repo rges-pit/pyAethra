@@ -33,24 +33,16 @@ def solve_fs_fb(A, flux, flux_err):
     return Fs, Fb
 
 
-def fit_pspl(time, mag, mag_err):
-    time = np.asarray(time, dtype=float)
-    mag  = np.asarray(mag,  dtype=float)
-    mag_err = np.asarray(mag_err, dtype=float)
+def fit_pspl(time, flux, flux_err):
+    """Fit a PSPL model in flux space. Fs/Fb are solved analytically."""
+    time     = np.asarray(time,     dtype=float)
+    flux     = np.asarray(flux,     dtype=float)
+    flux_err = np.asarray(flux_err, dtype=float)
 
-    valid = np.isfinite(time) & np.isfinite(mag) & np.isfinite(mag_err) & (mag_err > 0)
-    time, mag, mag_err = time[valid], mag[valid], mag_err[valid]
+    valid = np.isfinite(time) & np.isfinite(flux) & np.isfinite(flux_err) & (flux_err > 0)
+    time, flux, flux_err = time[valid], flux[valid], flux_err[valid]
 
     if len(time) < 10 or np.ptp(time) <= 0:
-        return None
-
-    flux     = 10 ** (-0.4 * mag)
-    flux_err = 0.4 * np.log(10) * flux * mag_err
-
-    good = np.isfinite(flux) & np.isfinite(flux_err) & (flux_err > 0)
-    time, flux, flux_err = time[good], flux[good], flux_err[good]
-
-    if len(time) < 10:
         return None
 
     peak_idx      = np.argmax(flux)
@@ -110,8 +102,8 @@ def fit_pspl(time, mag, mag_err):
     return {"t0_fit": t0_fit, "tE_fit": tE_fit, "u0_fit": u0_fit, "chi2_red_pspl": chi2_red}
 
 
-def fit_pspl_candidate(time, mags, mag_err, good_pspl_chi2=2.5, ffp_tE_max=2.0):
-    pspl_result = fit_pspl(time, mags, mag_err)
+def fit_pspl_candidate(time, flux, flux_err, good_pspl_chi2=2.5, ffp_tE_max=2.0):
+    pspl_result = fit_pspl(time, flux, flux_err)
     if pspl_result is None:
         return {"t0_fit_raw": np.nan, "u0_fit": np.nan, "tE_fit": np.nan,
                 "chi2_red_pspl": np.nan, "is_candidate": False, "is_ffp_candidate": False}

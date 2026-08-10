@@ -6,13 +6,16 @@ __all__ = ["achromatic_test_from_event"]
 
 
 def achromatic_test_from_event(
-    obj_df, time_col, mag_col, err_col, filter_col, season_col,
+    obj_df, time_col, flux_col, flux_err_col, filter_col, season_col,
     best_season, t0_guess_raw, best_window_days,
     primary_filter="F146", secondary_filters=None, min_points=4,
 ):
     """
     Test whether the event is achromatic by comparing the primary detection
     band against one or more secondary bands.
+
+    Works entirely in flux: a brightening is a POSITIVE delta, and the event
+    peak is the flux maximum.
 
     secondary_filters can be a string (one band) or a list of strings
     (multiple bands, e.g. ["F087", "F213"]). Missing or too-sparse bands
@@ -23,7 +26,7 @@ def achromatic_test_from_event(
     True  : primary brightens AND at least one secondary confirms,
             none clearly disagree.
     False : primary brightens BUT at least one secondary clearly disagrees
-            (wrong direction or peak time offset > tolerance) → chromatic veto.
+            (wrong direction or peak time offset > tolerance) -> chromatic veto.
     nan   : cannot make a statement (no filter col, no t0, primary too sparse,
             or all secondaries abstained).
     """
@@ -51,42 +54,50 @@ def achromatic_test_from_event(
     def summarize(df_band):
         """Return summary dict, or None if the band is too sparse to judge."""
         t = df_band[time_col].to_numpy(dtype=float)
-        m = df_band[mag_col].to_numpy(dtype=float)
-        e = df_band[err_col].to_numpy(dtype=float)
-        valid = np.isfinite(t) & np.isfinite(m) & np.isfinite(e) & (e > 0)
-        t, m, e = t[valid], m[valid], e[valid]
+        f = df_band[flux_col].to_numpy(dtype=float)
+        e = df_band[flux_err_col].to_numpy(dtype=float)
+
+        valid = np.isfinite(t) & np.isfinite(f) & np.isfinite(e) & (e > 0)
+        t, f, e = t[valid], f[valid], e[valid]
         if len(t) < min_points:
             return None
+
         event_mask = np.abs(t - t0_guess_raw) <= half_window
-        base_mask  = np.abs(t - t0_guess_raw) > half_window
+        base_mask  = np.abs(t - t0_guess_raw) >  half_window
         if event_mask.sum() < 2 or base_mask.sum() < 3:
             return None
-        baseline_mag     = np.median(m[base_mask])
-        baseline_scatter = 1.4826 * np.median(np.abs(m[base_mask] - baseline_mag))
+
+        baseline_flux    = np.median(f[base_mask])
+        baseline_scatter = 1.4826 * np.median(np.abs(f[base_mask] - baseline_flux))
         if not np.isfinite(baseline_scatter) or baseline_scatter <= 0:
-            baseline_scatter = np.std(m[base_mask])
-        event_mag  = m[event_mask]
+            baseline_scatter = np.std(f[base_mask])
+
         event_time = t[event_mask]
+        event_flux = f[event_mask]
         event_err  = e[event_mask]
-        i_peak     = np.argmin(event_mag)
-        delta_mag  = baseline_mag - event_mag[i_peak]
-        local_err  = np.median(event_err)
-        denom      = max(local_err, baseline_scatter, 1e-6)
+
+        # Brightening = flux MAXIMUM (was argmin in magnitudes).
+        i_peak = np.argmax(event_flux)
+        delta  = event_flux[i_peak] - baseline_flux
+
+        local_err = np.median(event_err)
+        denom     = max(local_err, baseline_scatter, 1e-6)
+
         return {
             "peak_time":    event_time[i_peak],
-            "delta_mag":    delta_mag,
-            "significance": delta_mag / denom,
+            "delta_flux":   delta,
+            "significance": delta / denom,
         }
 
-    # ── primary band ──────────────────────────────────────────────────────────
+    # -- primary band ---------------------------------------------------------
     df_primary = season_df[season_df[filter_col] == primary_filter].copy()
     s_primary  = summarize(df_primary)
     if s_primary is None:
         return np.nan
-    if s_primary["delta_mag"] <= 0:
+    if s_primary["delta_flux"] <= 0:
         return False
 
-    # ── secondary bands ───────────────────────────────────────────────────────
+    # -- secondary bands ------------------------------------------------------
     band_votes = []
     for filt in secondary_filters:
         if filt not in season_df[filter_col].values:
@@ -99,7 +110,7 @@ def achromatic_test_from_event(
             band_votes.append(None)
             continue
 
-        if s["delta_mag"] <= 0:
+        if s["delta_flux"] <= 0:
             band_votes.append(False)
             continue
 
@@ -113,7 +124,7 @@ def achromatic_test_from_event(
 
         band_votes.append(True)
 
-    # ── combine votes ─────────────────────────────────────────────────────────
+    # -- combine votes --------------------------------------------------------
     if any(v is False for v in band_votes):
         return False
     if any(v is True for v in band_votes):

@@ -1,10 +1,10 @@
-# Example aethra pipeline configuration.
+# Example pyAethra pipeline configuration.
 #
 # Use it from the command line:
-#     aethra data.parquet --config config.yaml -o results.csv
+#     pyAethra data.parquet --config config.yaml -o results.csv
 #
 # Or in Python:
-#     from aethra import load_config, load_and_run
+#     from pyAethra import load_config, load_and_run
 #     cfg = load_config("config.yaml")
 #     results = load_and_run("data.parquet", cfg)
 #
@@ -15,6 +15,8 @@
 time_col: bjd        # time column (e.g. barycentric Julian date)
 mag_col: mag         # magnitude column
 err_col: mag_err     # magnitude-uncertainty column
+flux_col:     flux_uJy  # flux column names from the 2026 experienced tier data challenge
+flux_err_col: flux_err_uJy  # flux uncertainty column
 
 # ── Grouping & input parsing ───────────────────────────────────────────
 group_col: name      # column identifying each object; null for one object per file
@@ -35,3 +37,7 @@ ffp_tE_max: 2.0
 good_pspl_chi2: 2.5
 chromatic_min_points: 5
 fap_threshold: 0.01
+
+# ── Output ─────────────────────────────────────────────────────────────
+
+output_csv: null  # path to save results; null = don't save

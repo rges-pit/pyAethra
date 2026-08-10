@@ -1,5 +1,5 @@
 """
-aethra — Microlensing event-detection pipeline
+pyAethra — Microlensing event-detection pipeline
 ===================================================
 
 Works with any photometric dataset that has time, magnitude, and
@@ -32,6 +32,7 @@ from .detection import (
     recurrent_bump_veto,
 )
 from .io import load_and_run
+from .photometry import flux_to_mag, mag_to_flux, resolve_flux
 from .pipeline import run_pipeline_from_dataframe
 from .pspl import (
     fit_pspl,
@@ -45,10 +46,11 @@ from .variability import (
     is_non_flat_lightcurve,
     is_periodic,
     lomb_scargle_test,
-    periodic_veto_from_other_seasons,
-)
+    periodic_veto_from_other_seasons,)
+from .global_detection import (bin_to_nights, detect_bump_global)
 
-__version__ = "0.1.0"
+
+__version__ = "0.1.1"
 
 __all__ = [
     "__version__",
@@ -57,6 +59,10 @@ __all__ = [
     "load_and_run",
     "run_pipeline_from_dataframe",
     "load_config",
+    # photometry
+    "mag_to_flux",
+    "flux_to_mag",
+    "resolve_flux",
     # detection
     "has_consecutive_outliers",
     "flatness_chi2",
@@ -77,4 +83,7 @@ __all__ = [
     # seasons
     "split_into_seasons",
     "analyze_season_scan",
+    #global detection
+    "bin_to_nights",
+    "detect_bump_global",
 ]

@@ -97,12 +97,48 @@ def is_periodic(time, mag, mag_err=None, fap_threshold=0.01, min_points=10,
         return False, period, fap
     return (fap < fap_threshold), period, fap
 
+def _sinusoid_semi_amplitude(time, flux, flux_err, period):
+    """
+    Weighted least-squares fit of a sinusoid at a FIXED period.
+
+    Model: flux ≈ c + a·sin(2πt/P) + b·cos(2πt/P), weighted by 1/σ².
+    Returns the semi-amplitude √(a²+b²) in the units of `flux`, or nan if
+    the fit is not well posed. Closed-form 3×3 solve — no iteration.
+    """
+    t = np.asarray(time,     dtype=float)
+    f = np.asarray(flux,     dtype=float)
+    e = np.asarray(flux_err, dtype=float)
+
+    valid = np.isfinite(t) & np.isfinite(f) & np.isfinite(e) & (e > 0)
+    t, f, e = t[valid], f[valid], e[valid]
+
+    if len(t) < 4 or not np.isfinite(period) or period <= 0:
+        return np.nan
+
+    # Reference phases to the first epoch. BJD values are ~2.4e6, so at short
+    # periods the absolute phase carries needless float64 error; this also
+    # conditions the normal equations better. Amplitude is phase-invariant.
+    t = t - t[0]
+
+    omega = 2.0 * np.pi / period
+    X = np.column_stack([np.ones_like(t), np.sin(omega * t), np.cos(omega * t)])
+    w = 1.0 / e**2
+
+    M = X.T @ (X * w[:, None])
+    rhs = X.T @ (w * f)
+    try:
+        _, a, b = np.linalg.solve(M, rhs)
+    except np.linalg.LinAlgError:
+        return np.nan
+
+    return float(np.hypot(a, b))
 
 def periodic_veto_from_other_seasons(
     obj_df_primary, best_season,
     time_col="bjd", mag_col="mag", err_col="mag_err", season_col="season_id",
     min_points=40, fap_threshold=1e-6, min_period=0.1, max_period=50,
     min_cycles=4, ceiling_fraction=0.7,
+    event_delta_flux=None, amp_frac=0.1,
 ):
     """
     Veto if any off-event season shows significant internal periodicity.
@@ -146,6 +182,26 @@ def periodic_veto_from_other_seasons(
         if n_cycles < min_cycles:
             continue
 
-        return True, period, fap, f"repeating signal in off-event season {season_id}"
+        # Amplitude gate. At 12-min cadence a season holds ~8000 points, so a
+        # fixed FAP of 1e-6 corresponds to a normalised power of ~0.005 — a
+        # ~2 mmag systematic clears it easily. Detector/window systematics sit
+        # ~3 orders of magnitude below a real event's Δflux; a genuine variable
+        # contaminant modulates at a comparable level to the bump it produces.
+        # Requiring amp_frac of the event amplitude separates the two on
+        # physical grounds rather than on significance.
+        amp_note = ""
+        if event_delta_flux is not None and np.isfinite(event_delta_flux) and event_delta_flux > 0:
+            semi_amp = _sinusoid_semi_amplitude(
+                time, mag, mag_err, period
+            )
+            if np.isfinite(semi_amp):
+                ratio = semi_amp / event_delta_flux
+                if ratio < amp_frac:
+                    continue  # too weak to be the event — keep scanning
+                amp_note = f", amp={ratio:.2f}×event"
+
+        return True, period, fap, (
+            f"repeating signal in off-event season {season_id}{amp_note}"
+        )
 
     return False, np.nan, np.nan, "no periodic off-event season found"

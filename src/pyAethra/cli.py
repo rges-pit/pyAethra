@@ -3,10 +3,10 @@
 Two ways to configure a run:
 
     # everything in a YAML file
-    aethra data.parquet --config config.yaml
+    pyAethra data.parquet --config config.yaml
 
     # or via flags (flags override anything also set in --config)
-    aethra "lc/*.txt" --columns bjd mag mag_err -o results.csv
+    pyAethra "lc/*.txt" --columns bjd mag mag_err -o results.csv
 """
 
 import argparse
@@ -21,6 +21,10 @@ _FLAG_TO_CONFIG = {
     "time_col": "time_col",
     "mag_col": "mag_col",
     "err_col": "err_col",
+    "flux_col": "flux_col",
+    "flux_err_col": "flux_err_col",
+    "zero_point": "zero_point",
+    "recurrent_snr_floor": "recurrent_snr_floor",
     "group_col": "group_col",
     "filter_col": "filter_col",
     "target_filter": "target_filter",
@@ -39,7 +43,7 @@ _FLAG_TO_CONFIG = {
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="aethra",
+        prog="pyAethra",
         description="Run the microlensing event-detection pipeline on a dataset.",
     )
     p.add_argument(
@@ -59,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--time-col", default=None, help="Time column name (default: bjd)")
     p.add_argument("--mag-col", default=None, help="Magnitude column name (default: mag)")
     p.add_argument("--err-col", default=None, help="Error column name (default: mag_err)")
+    p.add_argument("--flux-col", default=None, help="Flux column name (use instead of --mag-col)")
+    p.add_argument("--flux-err-col", default=None, help="Flux error column name (required with --flux-col)")
+    p.add_argument("--zero-point", type=float, default=None, help="Zero point for reporting mags from flux (default: 0.0)")
+    p.add_argument("--recurrent-snr-floor", type=float, default=None, help="bump_snr floor for a season to count as a bump season (default: 25.0)")
     p.add_argument("--group-col", default=None, help="Column identifying each object (e.g. 'name')")
     p.add_argument("--filter-col", default=None, help="Filter/band column name (enables achromatic test)")
     p.add_argument("--target-filter", default=None, help="Primary detection band (default: F146)")
@@ -93,10 +101,12 @@ def build_config(args) -> dict:
     if args.header is not None:
         config["header"] = int(args.header)
 
-    # The three required columns must exist; fall back to conventional names.
+    # time is always required; photometry falls back to conventional mag names
+    # only when no flux columns were given.
     config.setdefault("time_col", "bjd")
-    config.setdefault("mag_col", "mag")
-    config.setdefault("err_col", "mag_err")
+    if not config.get("flux_col"):
+        config.setdefault("mag_col", "mag")
+        config.setdefault("err_col", "mag_err")
     return config
 
 
@@ -107,9 +117,9 @@ def main(argv=None) -> int:
     results = load_and_run(args.input_path, config, debug=args.debug)
 
     print(f"\nPipeline complete — {len(results)} object(s) processed.")
-    print(f"  is_candidate:     {int(results['is_candidate'].sum())}")
-    print(f"  is_ffp_candidate: {int(results['is_ffp_candidate'].sum())}")
-    print(f"  is_variable_star: {int(results['is_variable_star'].sum())}")
+    counts = results["ID"].value_counts()
+    for label in ("microlensing", "ffp", "variable star", "flat"):
+        print(f"  {label:<15} {int(counts.get(label, 0))}")
 
     if args.output:
         results.to_csv(args.output, index=False)

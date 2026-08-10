@@ -9,7 +9,7 @@ def load_config(path):
     """Load a pipeline configuration from a YAML file into a plain dict.
 
     The returned dict is suitable for passing straight to
-    :func:`aethra.load_and_run` or :func:`aethra.run_pipeline_from_dataframe`.
+    :func:`pyAethra.load_and_run` or :func:`pyAethra.run_pipeline_from_dataframe`.
 
     Keys omitted from the file fall back to the pipeline's built-in defaults
     at run time, with one exception: the required column keys ``time_col``,

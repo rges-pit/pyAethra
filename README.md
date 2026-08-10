@@ -1,61 +1,62 @@
-# aethra
+# pyAethra
+
+**A**utomated **E**vent **T**racker and c**H**aracterizer for **R**oman **A**lerts
 
 A configurable pipeline for detecting **microlensing events** in photometric
-light curves. It works with any dataset that has time, magnitude, and
-magnitude-error columns (column names are configurable), automatically handling
-file-format detection, multi-object grouping, observing-season splitting, and
-multi-band ("achromatic") vetoes.
+light curves. It works with any dataset that has a time column plus either
+flux/flux-error or magnitude/magnitude-error columns (names are configurable),
+automatically handling file-format detection, multi-object grouping,
+observing-season splitting, and multi-band ("achromatic") vetoes.
+
+The pipeline is **flux-native**: magnitudes are converted to flux once on entry
+and every statistic downstream is computed in flux space. Magnitudes are
+reconstructed only for reporting.
 
 ## What it does
 
 For each object the pipeline:
 
 1. Splits the light curve into observing **seasons** (by time gaps).
-2. Scans each season for a brightening **bump** (rolling weighted-flux SNR) and
-   checks the curve is **non-flat** (reduced χ² + consecutive outliers).
+2. Scans each season for a brightening **bump** (trials-corrected rolling flux
+   significance) and checks the curve is **non-flat** (reduced χ² + consecutive
+   outliers). The best season is the one with the highest bump significance.
 3. Applies three **vetoes** to reject variable stars:
    - **periodic** — significant Lomb–Scargle periodicity in off-event seasons,
-   - **recurrent** — a comparable bump repeating in other seasons,
+   - **recurrent** — bumps in more than one *excursion* (non-contiguous bump
+     seasons); a single contiguous run of bump seasons is one excursion and
+     does **not** veto, so a long-tE event split across a season gap survives,
    - **chromatic** — the brightening disagrees across photometric bands.
 4. Fits a **point-source point-lens (PSPL)** model to surviving candidates and
    flags short-timescale **free-floating-planet (FFP)** candidates.
 
-The result is a tidy `pandas.DataFrame`, one row per object, with the columns
-listed in [`OUTPUT_COLUMNS`](src/aethra/schema.py).
+Each object gets a single label in the `ID` column: `microlensing`, `ffp`,
+`variable star`, or `flat`. The result is a tidy `pandas.DataFrame`, one row per
+object, with the columns listed in [`OUTPUT_COLUMNS`](src/pyAethra/schema.py).
 
 ## Installation
-for the most updated version:
+
+For the most up-to-date version:
 
 ```bash
-git clone https://github.com/rges-pit/aethra.git
-cd aethra
+git clone https://github.com/rges-pit/pyAethra.git
+cd pyAethra
 pip install -e .
 ```
-(Note: don't forget the . after the -e)
 
-or stable version: 
+(Note: don't forget the `.` after the `-e`.)
 
-```
-pip install aethra
-```
-Reading Parquet input needs the optional extra:
+Or the stable version:
 
 ```bash
-pip install -e ".[parquet]"
+pip install pyAethra
 ```
 
-For development (tests + linting):
-
-```bash
-pip install -e ".[dev]"
-```
-
-Requires Python ≥ 3.9. Core dependencies: NumPy, pandas, SciPy, Astropy.
+Requires Python ≥ 3.8. Core dependencies: NumPy, pandas, SciPy, Astropy.
 
 ## Quick start
 
 ```python
-from aethra import load_and_run
+from pyAethra import load_and_run
 
 config = {
     "time_col": "bjd",
@@ -65,7 +66,19 @@ config = {
 }
 
 results = load_and_run("data.parquet", config)
-candidates = results[results["is_candidate"]]
+candidates = results[results["ID"].isin(["microlensing", "ffp"])]
+```
+
+If your data is already in flux, give the flux columns instead — nothing else
+changes:
+
+```python
+config = {
+    "time_col":     "bjd",
+    "flux_col":     "flux",
+    "flux_err_col": "flux_err",
+    "group_col":    "name",
+}
 ```
 
 `load_and_run` auto-dispatches on the input type:
@@ -80,8 +93,15 @@ candidates = results[results["is_candidate"]]
 You can also call the per-DataFrame driver directly:
 
 ```python
-from aethra import run_pipeline_from_dataframe
+from pyAethra import run_pipeline_from_dataframe
 results = run_pipeline_from_dataframe(df, config)
+```
+
+Or run and print a summary of the veto counts and label tally in one call:
+
+```python
+from pyAethra.pipeline import run_and_report
+results = run_and_report("data.parquet", config, output_csv="results.csv")
 ```
 
 ## Configuration from a YAML file
@@ -92,7 +112,7 @@ how it was configured. See [`examples/config.yaml`](examples/config.yaml) for a
 fully commented template.
 
 ```python
-from aethra import load_config, load_and_run
+from pyAethra import load_config, load_and_run
 
 config = load_config("config.yaml")
 results = load_and_run("data.parquet", config)
@@ -101,22 +121,7 @@ results = load_and_run("data.parquet", config)
 Keys you omit fall back to the built-in defaults; YAML `null` maps to Python
 `None` (e.g. `group_col: null` means one object per file).
 
-## Command line
-
-The package installs an `aethra` console script:
-
-```bash
-# Drive the whole run from a YAML config file
-aethra data.parquet --config config.yaml -o results.csv
-
-# Or pass options as flags (flags override anything also set in --config)
-aethra "lc/*.txt" --columns bjd mag mag_err -o results.csv
-
-# A multi-object CSV with a header row
-aethra data.csv --sep "," --header 0 --group-col name -o results.csv
-```
-
-Run `aethra --help` for the full option list.
+Run `pyAethra --help` for the full option list.
 
 ## Configuration reference
 
@@ -124,11 +129,15 @@ Passed as the `config` dict (or the matching CLI flag).
 
 ### Required
 
-| Key        | Meaning                          |
-|------------|----------------------------------|
-| `time_col` | Time column (e.g. BJD)           |
-| `mag_col`  | Magnitude column                 |
-| `err_col`  | Magnitude-uncertainty column     |
+`time_col` is always required, plus **one** photometry pair.
+
+| Key            | Meaning |
+|----------------|---------|
+| `time_col`     | Time column (e.g. BJD) |
+| `mag_col`      | Magnitude column (converted to flux on entry) |
+| `err_col`      | Magnitude-uncertainty column |
+| `flux_col`     | Flux column — use instead of `mag_col`; passed through untouched |
+| `flux_err_col` | Flux-uncertainty column — required whenever `flux_col` is set |
 
 ### Grouping & input parsing
 
@@ -139,14 +148,20 @@ Passed as the `config` dict (or the matching CLI flag).
 | `header`   | `None`  | Header row index for text files; `None` = no header. |
 | `columns`  | `None`  | Column names to assign when there is no header row. |
 
+### Photometry
+
+| Key          | Default | Meaning |
+|--------------|---------|---------|
+| `zero_point` | `0.0`   | Zero point used for the mag ↔ flux conversion and for reporting `baseline_mag` / `peak_mag`. |
+
 ### Filters / achromatic test
 
-| Key                | Default        | Meaning |
-|--------------------|----------------|---------|
-| `filter_col`       | `None`         | Band column. `None` skips the achromatic test. |
-| `target_filter`    | `"F146"`       | Band used for event detection. |
-| `primary_filter`   | `"F146"`       | Primary band in the achromatic test. |
-| `secondary_filters`| `None`         | One band (str) or several (list) to compare against. |
+| Key                | Default  | Meaning |
+|--------------------|----------|---------|
+| `filter_col`       | `None`   | Band column. `None` skips the achromatic test. |
+| `target_filter`    | `"F146"` | Band used for event detection. |
+| `primary_filter`   | `"F146"` | Primary band in the achromatic test. |
+| `secondary_filters`| `None`   | One band (str) or several (list) to compare against. `secondary_filter` (singular) is accepted as an alias. |
 
 ### Tuning
 
@@ -157,56 +172,74 @@ Passed as the `config` dict (or the matching CLI flag).
 | `ffp_tE_max`          | `2.0`   | Max tE (days) to flag a free-floating-planet candidate. |
 | `good_pspl_chi2`      | `2.5`   | Reduced-χ² threshold for an acceptable PSPL fit. |
 | `chromatic_min_points`| `5`     | Min points per band for the achromatic test. |
-| `fap_threshold`       | `0.01`  | False-alarm threshold for periodicity. **See Known quirks.** |
+| `recurrent_snr_floor` | `25.0`  | `bump_snr` floor for a season to count as a bump season in the recurrent veto. |
+| `fap_threshold`       | `0.01`  | False-alarm threshold for periodicity. |
 
 ## Output columns
 
-`name`, `is_candidate`, `is_ffp_candidate`, `is_variable_star`,
-`veto_periodic`, `veto_recurrent`, `veto_chromatic`, `is_achromatic`,
-`best_season`, `is_flat`, `chi2_flat`, `dof_flat`, `chi2_red_flat`,
-`bump_flag`, `bump_snr`, `t0_fit`, `u0_fit`, `tE_fit`, `chi2_red_pspl`,
-`baseline_mag`, `peak_mag`.
+One row per object.
 
-`t0_fit` is reported with `2450000` subtracted.
+| Column | Type | Description |
+|---|---|---|
+| `name` | str | Object identifier |
+| `label` | str | Classification: `microlensing`, `ffp`, `variable star`, or `flat` |
+| `periodic` | bool | Rejected by periodicity veto |
+| `recurrent` | bool | Rejected by recurrent bump veto |
+| `chromatic` | bool | Rejected by chromatic veto |
+| `best_season` | int | Season ID with the highest bump SNR |
+| `is_flat` | bool | Best season is consistent with a flat baseline |
+| `chi2_flat` | float | χ² of the flat-model fit |
+| `dof_flat` | int | Degrees of freedom |
+| `chi2_red_flat` | float | Reduced χ² of the flat model |
+| `bump_flag` | bool | Trials-corrected bump detected |
+| `bump_snr` | float | Peak bump significance |
+| `t0_fit` | float | PSPL best-fit peak time (HJD − 2450000) |
+| `u0_fit` | float | PSPL best-fit impact parameter |
+| `tE_fit` | float | PSPL best-fit Einstein crossing time (days) |
+| `chi2_red_pspl` | float | Reduced χ² of the PSPL fit |
+| `baseline_flux` | float | Median baseline flux of the best season |
+| `peak_flux` | float | Maximum flux of the best season |
+| `baseline_mag` | float | Baseline flux converted back to magnitude |
+| `peak_mag` | float | Peak flux converted back to magnitude |
+| `scan_candidate` | bool | Bump detected **and** season is non-flat (input to `ID`) |
+
+`label` is derived as: `flat` if `scan_candidate` is False; otherwise
+`variable star` if any veto fired; otherwise `ffp` if `tE_fit < ffp_tE_max`,
+else `microlensing`.
+
+## How the label is decided
+
+```
+scan_candidate = bump_flag AND is_non_flat          (best season)
+any_veto       = periodic OR recurrent OR chromatic
+
+not scan_candidate            -> "flat"
+scan_candidate AND any_veto   -> "variable star"
+scan_candidate, PSPL tE < ffp_tE_max -> "ffp"
+otherwise                     -> "microlensing"
+```
+
+A candidate also needs a PSPL fit with `chi2_red_pspl < good_pspl_chi2` to be
+called an FFP; a poor fit still leaves the object as `microlensing`.
+
 
 ## Package layout
 
 ```
-src/aethra/
+src/pyAethra/
 ├── __init__.py      # public API
 ├── schema.py        # OUTPUT_COLUMNS
 ├── config.py        # load_config (YAML → config dict)
+├── photometry.py    # mag ↔ flux conversion + input-column resolution
 ├── detection.py     # outlier / flatness / bump detection + recurrent veto
+├── global_detection.py     # whole light curve bump detection for long events
 ├── variability.py   # non-flatness + Lomb–Scargle periodicity veto
 ├── achromatic.py    # multi-band achromaticity test
-├── pspl.py          # PSPL magnification model + fitting
+├── pspl.py          # PSPL magnification model + fitting (Fs/Fb solved analytically)
 ├── seasons.py       # season splitting and per-season scan
-├── pipeline.py      # run_pipeline_from_dataframe (main driver)
+├── pipeline.py      # run_pipeline_from_dataframe (main driver) + run_and_report
 ├── io.py            # file loaders + load_and_run dispatcher
-└── cli.py           # `aethra` console script
-```
-
-## Known quirks
-
-These reflect the behavior of the original code and are **preserved as-is**;
-they are documented here so you can decide whether to change them:
-
-- **`config["fap_threshold"]` is not currently wired into the periodic veto.**
-  `run_pipeline_from_dataframe` calls the off-season periodicity check with a
-  hardcoded `fap_threshold=1e-6`. The config key only affects the standalone
-  `is_periodic` / `lomb_scargle_test` helpers. To honor the config value in the
-  pipeline, pass `fap_threshold=...` into `periodic_veto_from_other_seasons`.
-- **`split_into_seasons` labels the very first data point separately.** The
-  first point of a light curve keeps label `0` while the rest of season one is
-  labeled `1`. In practice that single-point "season 0" is dropped by the
-  `min_points` filter, but it does mean the first epoch is excluded from the
-  season scan.
-
-## Testing
-
-```bash
-pip install -e ".[dev]"
-pytest
+└── cli.py           # `pyAethra` console script
 ```
 
 ## License

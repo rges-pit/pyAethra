@@ -1,15 +1,16 @@
-"""Basic smoke and functional tests for the aethra pipeline."""
+"""Basic smoke and functional tests for the pyAethra pipeline."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-import aethra as ef
-from aethra import (
+import pyAethra as ef
+from pyAethra import (
     OUTPUT_COLUMNS,
     detect_bump,
     fit_pspl,
     load_and_run,
+    mag_to_flux,
     pspl_magnification,
     run_pipeline_from_dataframe,
     split_into_seasons,
@@ -78,28 +79,73 @@ def test_pipeline_runs_on_dataframe():
 
 def test_flat_lightcurve_is_not_a_candidate():
     df = run_pipeline_from_dataframe(make_lightcurve(with_event=False), CONFIG)
-    assert bool(df.iloc[0]["is_candidate"]) is False
+    assert df.iloc[0]["ID"] == "flat"
+    assert bool(df.iloc[0]["scan_candidate"]) is False
 
 
 def test_detect_bump_finds_injected_bump():
+    # detect_bump is flux-native: a brightening must be a POSITIVE excursion.
+    # Passing magnitudes makes the event a dip and the detector cannot see it.
     lc = make_lightcurve(with_event=True)
-    flag, _, snr = detect_bump(
-        lc["bjd"].to_numpy(), lc["mag"].to_numpy(), lc["mag_err"].to_numpy()
-    )
+    flux, flux_err = mag_to_flux(lc["mag"].to_numpy(), lc["mag_err"].to_numpy())
+    flag, window, snr = detect_bump(lc["bjd"].to_numpy(), flux, flux_err)
     assert flag is True
     assert np.isfinite(snr)
+    # A u0=0.1 event is overwhelming. A modest snr here would mean the detector
+    # is firing on a baseline artefact rather than on the injected bump.
+    assert snr > 100
+    # The injected tE is 8 d, so the winning window should be a short one.
+    assert window <= 20
+
 
 
 def test_fit_pspl_recovers_parameters():
+    # fit_pspl works in flux space, so magnitudes have to be converted first.
     lc = make_lightcurve(with_event=True)
     # restrict to the event season for a clean fit
     season = lc[lc["bjd"] < 2459200]
-    result = fit_pspl(
-        season["bjd"].to_numpy(), season["mag"].to_numpy(), season["mag_err"].to_numpy()
+    flux, flux_err = mag_to_flux(
+        season["mag"].to_numpy(), season["mag_err"].to_numpy()
     )
+    result = fit_pspl(season["bjd"].to_numpy(), flux, flux_err)
     assert result is not None
     assert abs(result["t0_fit"] - 2459060.0) < 5.0
     assert result["tE_fit"] > 0
+    # Injected parameters were t0=2459060, u0=0.1, tE=8.
+    assert abs(result["tE_fit"] - 8.0) < 1.0
+    assert abs(result["u0_fit"] - 0.1) < 0.05
+    assert result["chi2_red_pspl"] < 2.5
+
+
+def test_flux_columns_give_the_same_answer_as_magnitudes():
+    """flux_col/flux_err_col input must reach the same verdict as mag input."""
+    lc = make_lightcurve(with_event=True)
+    flux, flux_err = mag_to_flux(lc["mag"].to_numpy(), lc["mag_err"].to_numpy())
+    flux_lc = pd.DataFrame(
+        {"bjd": lc["bjd"], "flux": flux, "flux_err": flux_err, "name": "obj1"}
+    )
+    flux_cfg = {
+        "time_col": "bjd",
+        "flux_col": "flux",
+        "flux_err_col": "flux_err",
+        "group_col": "name",
+    }
+    from_flux = run_pipeline_from_dataframe(flux_lc, flux_cfg)
+    from_mag = run_pipeline_from_dataframe(lc, CONFIG)
+    assert from_flux.iloc[0]["ID"] == from_mag.iloc[0]["ID"]
+    assert np.isclose(
+        from_flux.iloc[0]["tE_fit"], from_mag.iloc[0]["tE_fit"], rtol=1e-6
+    )
+
+
+def test_flux_col_without_err_raises():
+    lc = make_lightcurve()
+    flux, _ = mag_to_flux(lc["mag"].to_numpy(), lc["mag_err"].to_numpy())
+    lc = lc.assign(flux=flux)
+    with pytest.raises(ValueError):
+        run_pipeline_from_dataframe(
+            lc, {"time_col": "bjd", "flux_col": "flux", "group_col": "name"}
+        )
 
 
 def test_load_and_run_accepts_dataframe():
@@ -126,7 +172,7 @@ def test_missing_column_raises():
 # ── YAML configuration ────────────────────────────────────────────────────────
 
 def test_load_config_reads_yaml(tmp_path):
-    from aethra import load_config
+    from pyAethra import load_config
 
     p = tmp_path / "config.yaml"
     p.write_text(
@@ -143,7 +189,7 @@ def test_load_config_reads_yaml(tmp_path):
 
 
 def test_load_config_null_becomes_none(tmp_path):
-    from aethra import load_config
+    from pyAethra import load_config
 
     p = tmp_path / "config.yaml"
     p.write_text("time_col: bjd\nmag_col: mag\nerr_col: mag_err\ngroup_col: null\n")
@@ -152,7 +198,7 @@ def test_load_config_null_becomes_none(tmp_path):
 
 
 def test_load_config_rejects_non_mapping(tmp_path):
-    from aethra import load_config
+    from pyAethra import load_config
 
     p = tmp_path / "bad.yaml"
     p.write_text("- just\n- a\n- list\n")
@@ -161,7 +207,7 @@ def test_load_config_rejects_non_mapping(tmp_path):
 
 
 def test_run_from_yaml_config(tmp_path):
-    from aethra import load_config
+    from pyAethra import load_config
 
     lc = make_lightcurve()
     data_path = tmp_path / "data.csv"
@@ -182,7 +228,7 @@ def test_run_from_yaml_config(tmp_path):
 
 
 def test_cli_config_with_flag_override(tmp_path):
-    from aethra.cli import build_config, build_parser
+    from pyAethra.cli import build_config, build_parser
 
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text("time_col: bjd\nmag_col: mag\nerr_col: mag_err\nmin_points: 10\n")

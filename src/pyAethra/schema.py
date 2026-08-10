@@ -2,13 +2,10 @@
 
 OUTPUT_COLUMNS = [
     "name",
-    "is_candidate",
-    "is_ffp_candidate",
-    "is_variable_star",
-    "veto_periodic",
-    "veto_recurrent",
-    "veto_chromatic",
-    "is_achromatic",
+    "label",
+    "periodic",
+    "recurrent",
+    "chromatic",
     "best_season",
     "is_flat",
     "chi2_flat",
@@ -20,6 +17,9 @@ OUTPUT_COLUMNS = [
     "u0_fit",
     "tE_fit",
     "chi2_red_pspl",
+    "baseline_flux",
+    "peak_flux",
     "baseline_mag",
     "peak_mag",
+    "scan_candidate",
 ]
