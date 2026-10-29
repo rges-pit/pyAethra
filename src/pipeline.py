@@ -7,10 +7,10 @@ from .achromatic import achromatic_test_from_event
 from .detection import recurrent_bump_veto
 from .global_detection import detect_bump_global
 from .photometry import flux_to_mag, resolve_flux
-from .pspl import fit_pspl_candidate
+from .pspl import fit_pspl_candidate, _empty_candidate
 from .schema import OUTPUT_COLUMNS
-from .seasons import analyze_season_scan, split_into_seasons
-from .variability import periodic_veto_from_other_seasons
+from .seasons import analyze_season_scan, assign_seasons
+from .variability import periodic_veto_from_other_seasons, in_season_periodic_veto
 
 __all__ = ["run_pipeline_from_dataframe"]
 
@@ -18,18 +18,35 @@ __all__ = ["run_pipeline_from_dataframe"]
 def _empty_result(obj_name):
     """Return a zeroed-out result row for objects with insufficient data."""
     return {
-        "name": obj_name, "ID": "flat",
-        "scan_candidate": False, "best_season": np.nan, "is_flat": True,
+        "name": obj_name, "label": "flat",
+        "scan_candidate": False, "best_season": np.nan, "current_season": np.nan,
+        "is_flat": True,
         "chi2_flat": np.nan, "dof_flat": np.nan, "chi2_red_flat": np.nan,
         "bump_flag": False, "bump_snr": np.nan,
         "t0_fit": np.nan, "u0_fit": np.nan, "tE_fit": np.nan,
         "chi2_red_pspl": np.nan,
+        "t0_fit_fspl": np.nan, "u0_fit_fspl": np.nan, "tE_fit_fspl": np.nan,
+        "rho_fit_fspl": np.nan, "t_star_fspl": np.nan, "chi2_red_fspl": np.nan,
+        "chi2_fspl": np.nan, "n_points": np.nan,
+        "source_mag": np.nan, "blend_mag": np.nan,
+        "finite_source": False,
+        "finite_source_delta_chi2": np.nan,
+        "RA": np.nan, "Dec": np.nan,
+        "period": np.nan, "period_amplitude": np.nan,
         "baseline_flux": np.nan, "peak_flux": np.nan,
         "baseline_mag": np.nan, "peak_mag": np.nan,
         "periodic": False, "recurrent": False, "chromatic": False,
         "n_seasons": np.nan, "is_achromatic": np.nan,
         "season_candidate": False,
     }
+
+def _first_finite(df, col):
+    """First finite value of `col` for this object, or nan if absent."""
+    if col is None or col not in df.columns:
+        return np.nan
+    vals = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+    vals = vals[np.isfinite(vals)]
+    return float(vals[0]) if len(vals) else np.nan
 
 def _classify(scan_candidate, any_veto, is_ffp):
     """Collapse the bump/veto/PSPL flags into a single label."""
@@ -69,7 +86,9 @@ def run_pipeline_from_dataframe(df, config, debug=False):
     min_points        = config.get("min_points",           10)
     gap_days          = config.get("season_gap_days",     100)
     ffp_tE_max        = config.get("ffp_tE_max",          2.0)
-    good_pspl_chi2    = config.get("good_pspl_chi2",      2.5)
+    good_fit_chi2     = config.get("good_fit_chi2",       2.5)
+    current_season    = config.get("current_season",      None)
+    season_edges      = config.get("season_edges",        "auto")
     # NOTE: the periodic veto below currently hardcodes fap_threshold=1e-6
     # rather than reading config["fap_threshold"]. See README "Known quirks".
     chromatic_min_pts = config.get("chromatic_min_points",  5)
@@ -77,6 +96,21 @@ def run_pipeline_from_dataframe(df, config, debug=False):
     recurrent_floor   = config.get("recurrent_snr_floor",  25.0)
     global_bin_days = config.get("global_bin_days", 1.0)
     global_windows = tuple(config.get("global_window_days", (20.0, 50.0, 100.0, 200.0, 400.0)))
+    fspl_rho_seeds = tuple(config.get("fspl_rho_seeds", (0.01, 0.1, 1.0, 3.0)))
+    fs_delta_chi2_min = config.get("fs_delta_chi2_min", None)  # None -> ln N (BIC)
+    fs_u0_rho_max = config.get("fs_u0_rho_max", 2.0)
+    fs_min_crossing_points = config.get("fs_min_crossing_points", 3)
+    # In-season periodic veto: runs only when there is no off-event season.
+    in_season_periodic = config.get("in_season_periodic", True)
+    periodic_min_period = config.get("periodic_min_period", 0.02)
+    ra_col            = config.get("ra_col",               "ra_deg")
+    dec_col           = config.get("dec_col",              "dec_deg")
+    in_season_kwargs = dict(
+        min_cycles=config.get("in_season_min_cycles", 3.0),
+        n_segments=config.get("in_season_n_segments", 3),
+        coherence_min=config.get("in_season_coherence_min", 0.5),
+        max_phase_diff=config.get("in_season_max_phase_diff", 0.25),
+    )
 
     if time_col not in df.columns:
         raise ValueError(f"Required column '{time_col}' not found in DataFrame. "
@@ -86,6 +120,18 @@ def run_pipeline_from_dataframe(df, config, debug=False):
     # Single conversion boundary: mag input -> flux here, flux input passes
     # through untouched. Everything downstream is flux-only.
     working["_flux"], working["_flux_err"] = resolve_flux(working, config)
+
+    # Survey-wide season numbering: assigned ONCE on the pooled timestamps of
+    # all objects and filters, so season N is the same stretch of time for
+    # every object. Seasons after current_season are dropped (simulates
+    # running mid-mission).
+    working["season_id"] = assign_seasons(
+        working[time_col].to_numpy(), gap_days=gap_days,
+        current_season=current_season, season_edges=season_edges,
+    )
+    if current_season is not None:
+        working = working[working["season_id"] <= current_season]
+
     grouped = [("single_object", working)] if group_col is None else working.groupby(group_col)
 
     results = []
@@ -95,9 +141,9 @@ def run_pipeline_from_dataframe(df, config, debug=False):
         if len(obj_df_all) == 0:
             continue
 
-        season_labels = split_into_seasons(obj_df_all[time_col].to_numpy(), gap_days=gap_days)
-        obj_df_all["season_id"] = season_labels
         n_seasons = int(obj_df_all["season_id"].nunique())
+
+        ra, dec = _first_finite(obj_df_all, ra_col), _first_finite(obj_df_all, dec_col)
 
         if filter_col is not None and filter_col in obj_df_all.columns:
             obj_df_primary = obj_df_all[obj_df_all[filter_col] == target_filter].copy()
@@ -107,7 +153,7 @@ def run_pipeline_from_dataframe(df, config, debug=False):
         if len(obj_df_primary) == 0:
             if debug:
                 print(f"[{obj_name}] SKIP — no rows in primary band '{target_filter}'")
-            results.append({**_empty_result(obj_name), "n_seasons": n_seasons})
+            results.append({**_empty_result(obj_name), "n_seasons": n_seasons, "RA": ra, "Dec": dec})
             continue
 
         season_rows = []
@@ -128,7 +174,7 @@ def run_pipeline_from_dataframe(df, config, debug=False):
             })
 
         if not season_rows:
-            results.append({**_empty_result(obj_name), "n_seasons": n_seasons})
+            results.append({**_empty_result(obj_name), "n_seasons": n_seasons, "RA": ra, "Dec": dec})
             continue
 
         best = max(season_rows, key=lambda r: r["bump_snr"] if np.isfinite(r["bump_snr"]) else -np.inf)
@@ -148,14 +194,15 @@ def run_pipeline_from_dataframe(df, config, debug=False):
         season_candidate = bool(best["bump_flag"] and best["is_non_flat"])
         scan_candidate = bool(season_candidate or glob["global_flag"])
 
+        period_info = {}  # strongest period found (reported even when no veto)
         periodic_veto, veto_period, veto_fap, veto_reason = periodic_veto_from_other_seasons(
             obj_df_primary=obj_df_primary, best_season=best["season"],
             time_col=time_col, mag_col="_flux", err_col="_flux_err", season_col="season_id",
             min_points=max(40, min_points), fap_threshold=1e-6,
-            min_period=config.get("periodic_min_period", 0.02),
-            max_period=50, min_cycles=4, ceiling_fraction=0.7,
+            min_period=periodic_min_period, max_period=50, min_cycles=4, ceiling_fraction=0.7,
             event_delta_flux=best["peak_flux"] - best["baseline_flux"],
             amp_frac=config.get("periodic_amp_frac", 0.1),
+            info=period_info,
         )
 
         recurrent_veto, bump_seasons, n_excursions = recurrent_bump_veto(
@@ -168,8 +215,6 @@ def run_pipeline_from_dataframe(df, config, debug=False):
             obj_df=obj_df_all,
             time_col=time_col, flux_col="_flux", flux_err_col="_flux_err",
             filter_col=filter_col,
-            season_col="season_id",
-            best_season=best["season"],
             t0_guess_raw=best["t0_guess_raw"],
             best_window_days=best["best_window"],
             primary_filter=primary_filter,
@@ -177,6 +222,30 @@ def run_pipeline_from_dataframe(df, config, debug=False):
             min_points=chromatic_min_pts,
         )
         veto_chromatic = (is_achromatic is False)
+
+        if scan_candidate:
+            pspl_info = fit_pspl_candidate(
+                best["time"], best["flux"], best["flux_err"],
+                good_fit_chi2=good_fit_chi2, ffp_tE_max=ffp_tE_max,
+                rho_seeds=fspl_rho_seeds, fs_delta_chi2_min=fs_delta_chi2_min,
+                fs_u0_rho_max=fs_u0_rho_max, fs_min_crossing_points=fs_min_crossing_points,
+            )
+        else:
+            pspl_info = _empty_candidate()
+
+        # No off-event season to test (e.g. a single short season): look for
+        # coherent periodicity in the event season's own PSPL residuals.
+        if (in_season_periodic and scan_candidate and not periodic_veto
+                and veto_reason == "not enough off-event data"):
+            periodic_veto, veto_period, veto_fap, veto_reason = in_season_periodic_veto(
+                best["time"], best["flux"], best["flux_err"],
+                t0=pspl_info["t0_fit_raw"], u0=pspl_info["u0_fit"], tE=pspl_info["tE_fit"],
+                event_delta_flux=best["peak_flux"] - best["baseline_flux"],
+                fap_threshold=1e-6, min_period=periodic_min_period, max_period=50, ceiling_fraction=0.7,
+                amp_frac=config.get("periodic_amp_frac", 0.1),
+                info=period_info,
+                **in_season_kwargs,
+            )
 
         if debug:
             season_summary = ", ".join(
@@ -198,21 +267,17 @@ def run_pipeline_from_dataframe(df, config, debug=False):
                 f"seasons: [{season_summary}]"
             )
 
-        if scan_candidate:
-            pspl_info = fit_pspl_candidate(
-                best["time"], best["flux"], best["flux_err"],
-                good_pspl_chi2=good_pspl_chi2, ffp_tE_max=ffp_tE_max,
-            )
-        else:
-            pspl_info = {"t0_fit_raw": np.nan, "u0_fit": np.nan, "tE_fit": np.nan,
-                         "chi2_red_pspl": np.nan, "is_candidate": False, "is_ffp_candidate": False}
-
         any_veto = bool(periodic_veto or recurrent_veto or veto_chromatic)
         ident = _classify(scan_candidate, any_veto, pspl_info["is_ffp_candidate"])
 
         t0_output = (
             pspl_info["t0_fit_raw"] - 2450000
             if np.isfinite(pspl_info["t0_fit_raw"]) else np.nan
+        )
+
+        t0_fspl_output = (
+            pspl_info["t0_fit_fspl_raw"] - 2450000
+            if np.isfinite(pspl_info["t0_fit_fspl_raw"]) else np.nan
         )
 
         results.append({
@@ -224,6 +289,7 @@ def run_pipeline_from_dataframe(df, config, debug=False):
             "chromatic":   veto_chromatic,
             "n_seasons":        n_seasons,
             "best_season":      best["season"],
+            "current_season":   current_season,
             "is_flat":          not best["is_non_flat"],
             "chi2_flat":        best["chi2_flat"],
             "dof_flat":         best["dof_flat"],
@@ -235,10 +301,28 @@ def run_pipeline_from_dataframe(df, config, debug=False):
             "u0_fit":           pspl_info["u0_fit"],
             "tE_fit":           pspl_info["tE_fit"],
             "chi2_red_pspl":    pspl_info["chi2_red_pspl"],
+            "t0_fit_fspl":   t0_fspl_output,
+            "u0_fit_fspl":   pspl_info["u0_fit_fspl"],
+            "tE_fit_fspl":   pspl_info["tE_fit_fspl"],
+            "rho_fit_fspl":  pspl_info["rho_fit_fspl"],
+            "t_star_fspl":   pspl_info["t_star_fspl"],
+            "chi2_red_fspl": pspl_info["chi2_red_fspl"],
+            "chi2_fspl": pspl_info["chi2_fspl"],
+            "n_points": pspl_info["n_points"],
+            # FSPL source / blend flux as magnitudes; nan when the flux is <= 0
+            # (negative blending), which the alert writes as null.
+            "source_mag": float(flux_to_mag(pspl_info["source_flux_fspl"], zero_point)),
+            "blend_mag": float(flux_to_mag(pspl_info["blend_flux_fspl"], zero_point)),
+            "finite_source": pspl_info["finite_source"],
+            "finite_source_delta_chi2": pspl_info["finite_source_delta_chi2"],
             "baseline_flux":    best["baseline_flux"],
             "peak_flux":        best["peak_flux"],
             "baseline_mag":     float(flux_to_mag(best["baseline_flux"], zero_point)),
             "peak_mag":         float(flux_to_mag(best["peak_flux"], zero_point)),
+            "RA": ra,
+            "Dec": dec,
+            "period": period_info.get("period", np.nan),
+            "period_amplitude": period_info.get("amplitude_mag", np.nan),
         })
 
     result_df = pd.DataFrame(results)

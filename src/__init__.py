@@ -7,7 +7,7 @@ magnitude-error columns (names are configurable).
 
 Quick start
 -----------
-    from aethra import load_and_run
+    from pyAethra import load_and_run
 
     config = {
         "time_col": "bjd",
@@ -34,23 +34,27 @@ from .detection import (
 from .io import load_and_run
 from .photometry import flux_to_mag, mag_to_flux, resolve_flux
 from .pipeline import run_pipeline_from_dataframe
-from .pspl import (
+from .pspl import (fspl_magnification,
+    fit_fspl,
     fit_pspl,
     fit_pspl_candidate,
     pspl_magnification,
     solve_fs_fb,
 )
 from .schema import OUTPUT_COLUMNS
-from .seasons import analyze_season_scan, split_into_seasons
+from .seasons import analyze_season_scan, assign_seasons, split_into_seasons
 from .variability import (
+    in_season_periodic_veto,
     is_non_flat_lightcurve,
     is_periodic,
     lomb_scargle_test,
-    periodic_veto_from_other_seasons,)
+    periodic_veto_from_other_seasons,
+)
 from .global_detection import (bin_to_nights, detect_bump_global)
+from .alerts import ALERT_FIELDS, build_alert, write_alerts
 
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "__version__",
@@ -73,6 +77,7 @@ __all__ = [
     "lomb_scargle_test",
     "is_periodic",
     "periodic_veto_from_other_seasons",
+    "in_season_periodic_veto",
     # achromatic
     "achromatic_test_from_event",
     # PSPL
@@ -80,10 +85,17 @@ __all__ = [
     "solve_fs_fb",
     "fit_pspl",
     "fit_pspl_candidate",
+    "fspl_magnification",
+    "fit_fspl",
     # seasons
     "split_into_seasons",
+    "assign_seasons",
     "analyze_season_scan",
     #global detection
     "bin_to_nights",
     "detect_bump_global",
+    #alerts
+    "ALERT_FIELDS",
+    "build_alert",
+    "write_alerts",
 ]

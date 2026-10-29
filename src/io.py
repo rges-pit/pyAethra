@@ -85,9 +85,15 @@ def _run_per_object_files(pattern, config, debug=False):
 
 def _run_paired_files(primary_pattern, secondary_pattern, config, debug=False):
     """Two per-filter files per object, matched by filename stem."""
-    pf = config.get("primary_filter",   "W149")
-    sf = config.get("secondary_filter", "Z087")
-    fc = config.get("filter_col",       "filt")
+    pf = config.get("primary_filter", "F146")
+    _sf = config.get("secondary_filters", config.get("secondary_filter"))
+    sf = _sf[0] if isinstance(_sf, (list, tuple)) else _sf
+    fc = config.get("filter_col")
+    if sf is None or fc is None:
+        raise ValueError(
+            "Paired-file input needs 'secondary_filters' (one band) and "
+            "'filter_col' in the config."
+        )
 
     primary_files   = {_file_stem(f, pf, sf): f for f in glob.glob(primary_pattern)}
     secondary_files = {_file_stem(f, pf, sf): f for f in glob.glob(secondary_pattern)}
@@ -169,3 +175,5 @@ def load_and_run(input_path, config, debug=False):
         return _run_single_table(input_path, config, debug=debug)
 
     return _run_per_object_files(input_path, config, debug=debug)
+
+

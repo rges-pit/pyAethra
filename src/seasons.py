@@ -5,7 +5,7 @@ import numpy as np
 from .detection import detect_bump, flatness_chi2
 from .variability import is_non_flat_lightcurve
 
-__all__ = ["split_into_seasons", "analyze_season_scan"]
+__all__ = ["split_into_seasons", "assign_seasons", "analyze_season_scan"]
 
 
 def split_into_seasons(time, gap_days=100):
@@ -22,6 +22,52 @@ def split_into_seasons(time, gap_days=100):
         labels_sorted[i] = season_id
     labels = np.empty(len(time), dtype=int)
     labels[order] = labels_sorted
+    return labels
+
+def assign_seasons(time, gap_days=100, current_season=None, season_edges="auto"):
+    """Fixed, survey-wide season number for every row.
+
+    Call ONCE on the full input (all objects, all filters) so that a season
+    number means the same stretch of time for every object, including one
+    with no data in some season.
+
+    season_edges
+        "auto": boundaries are gaps > gap_days in the pooled timestamps.
+            If at least `current_season` seasons are found (or current_season
+            is None) they are numbered 1, 2, ... forwards. If fewer are found,
+            the input is assumed to end in the current season and seasons are
+            numbered backwards from current_season (with a warning).
+        list of floats: start time of each season in the input time system,
+            season 1 first. Rows before the first start get season 0.
+
+    Rows with non-finite time get season 0.
+    """
+    time = np.asarray(time, dtype=float)
+    labels = np.zeros(len(time), dtype=int)
+    finite = np.isfinite(time)
+    if not np.any(finite):
+        return labels
+
+    offset = 0
+    if isinstance(season_edges, str):
+        if season_edges != "auto":
+            raise ValueError(
+                f"season_edges must be 'auto' or a list of season start times, "
+                f"got {season_edges!r}"
+            )
+        t = np.unique(time[finite])  # sorted
+        starts = np.concatenate(([t[0]], t[1:][np.diff(t) > gap_days]))
+        if current_season is not None and len(starts) < current_season:
+            offset = current_season - len(starts)
+            warnings.warn(
+                f"Found {len(starts)} season(s) but current_season={current_season}; "
+                f"assuming the data ends in the current season and numbering "
+                f"seasons {offset + 1}..{current_season}."
+            )
+    else:
+        starts = np.sort(np.asarray(season_edges, dtype=float))
+
+    labels[finite] = np.searchsorted(starts, time[finite], side="right") + offset
     return labels
 
 
@@ -59,7 +105,7 @@ def analyze_season_scan(time, flux, flux_err, min_points=10):
     is_non_flat = outlier_flag or (np.isfinite(chi2_red_flat) and chi2_red_flat > 1.5)
 
     bump_flag, best_window, bump_snr = detect_bump(
-        time, flux, flux_err, window_days=(2, 5, 10, 20, 50),
+        time, flux, flux_err, window_days=(0.1, 2, 5, 10, 20, 50),
     )
 
     t0_guess_raw = time[np.argmax(flux)] if len(time) > 0 else np.nan

@@ -6,8 +6,7 @@ __all__ = ["achromatic_test_from_event"]
 
 
 def achromatic_test_from_event(
-    obj_df, time_col, flux_col, flux_err_col, filter_col, season_col,
-    best_season, t0_guess_raw, best_window_days,
+    obj_df, time_col, flux_col, flux_err_col, filter_col, t0_guess_raw, best_window_days,
     primary_filter="F146", secondary_filters=None, min_points=4,
 ):
     """
@@ -41,9 +40,6 @@ def achromatic_test_from_event(
     if isinstance(secondary_filters, str):
         secondary_filters = [secondary_filters]
 
-    season_df = obj_df[obj_df[season_col] == best_season].copy()
-    if len(season_df) == 0:
-        return np.nan
 
     window = best_window_days
     if not np.isfinite(window) or window <= 0:
@@ -81,7 +77,7 @@ def achromatic_test_from_event(
         delta  = event_flux[i_peak] - baseline_flux
 
         local_err = np.median(event_err)
-        denom     = max(local_err, baseline_scatter, 1e-6)
+        denom = max(local_err, baseline_scatter, 0.1 * np.median(e))
 
         return {
             "peak_time":    event_time[i_peak],
@@ -90,7 +86,7 @@ def achromatic_test_from_event(
         }
 
     # -- primary band ---------------------------------------------------------
-    df_primary = season_df[season_df[filter_col] == primary_filter].copy()
+    df_primary = obj_df[obj_df[filter_col] == primary_filter].copy()
     s_primary  = summarize(df_primary)
     if s_primary is None:
         return np.nan
@@ -100,11 +96,11 @@ def achromatic_test_from_event(
     # -- secondary bands ------------------------------------------------------
     band_votes = []
     for filt in secondary_filters:
-        if filt not in season_df[filter_col].values:
+        if filt not in obj_df[filter_col].values:
             band_votes.append(None)
             continue
 
-        s = summarize(season_df[season_df[filter_col] == filt].copy())
+        s = summarize(obj_df[obj_df[filter_col] == filt].copy())
 
         if s is None:
             band_votes.append(None)

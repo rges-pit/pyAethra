@@ -31,10 +31,9 @@ _FLAG_TO_CONFIG = {
     "primary_filter": "primary_filter",
     "secondary_filters": "secondary_filters",
     "min_points": "min_points",
-    "fap_threshold": "fap_threshold",
     "season_gap_days": "season_gap_days",
     "ffp_te_max": "ffp_tE_max",
-    "good_pspl_chi2": "good_pspl_chi2",
+    "good_fit_chi2": "good_fit_chi2",
     "chromatic_min_points": "chromatic_min_points",
     "sep": "sep",
     "columns": "columns",
@@ -73,10 +72,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--primary-filter", default=None, help="Primary band for the achromatic test (default: F146)")
     p.add_argument("--secondary-filters", default=None, nargs="*", help="Secondary bands for the achromatic test")
     p.add_argument("--min-points", type=int, default=None, help="Minimum points per season (default: 10)")
-    p.add_argument("--fap-threshold", type=float, default=None, help="Periodicity false-alarm threshold (default: 0.01)")
     p.add_argument("--season-gap-days", type=float, default=None, help="Day gap separating seasons (default: 100)")
     p.add_argument("--ffp-te-max", type=float, default=None, help="Max tE (days) for an FFP candidate (default: 2.0)")
-    p.add_argument("--good-pspl-chi2", type=float, default=None, help="Reduced chi2 threshold for a good PSPL fit (default: 2.5)")
+    p.add_argument("--good-fit-chi2", "--good-pspl-chi2", dest="good_fit_chi2", type=float, default=None,
+                   help="Reduced chi2 threshold for a good fit of the selected model (default: 2.5)")
     p.add_argument("--chromatic-min-points", type=int, default=None, help="Min points per band for the achromatic test (default: 5)")
     p.add_argument("--sep", default=None, help="Column separator regex for text files (default: whitespace)")
     p.add_argument("--header", default=None, help="Header row index for text/CSV files (e.g. 0)")
@@ -117,7 +116,7 @@ def main(argv=None) -> int:
     results = load_and_run(args.input_path, config, debug=args.debug)
 
     print(f"\nPipeline complete — {len(results)} object(s) processed.")
-    counts = results["ID"].value_counts()
+    counts = results["label"].value_counts()
     for label in ("microlensing", "ffp", "variable star", "flat"):
         print(f"  {label:<15} {int(counts.get(label, 0))}")
 
