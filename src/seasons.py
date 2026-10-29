@@ -1,5 +1,6 @@
 """Season splitting and per-season scan."""
 
+import warnings
 import numpy as np
 
 from .detection import detect_bump, flatness_chi2
